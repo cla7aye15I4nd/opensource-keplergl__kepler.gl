@@ -721,6 +721,72 @@ test('#DatasetSchema -> null Arrow timestamps remain null through save and reloa
   t.end();
 });
 
+test('#DatasetSchema -> joined WKB geometry survives JSON save and reopen', t => {
+  const wkb = Uint8Array.from([1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 36, 64, 0, 0, 0, 0, 0, 0, 38, 64]);
+  const table = new arrow.Table({
+    key: arrow.vectorFromArray(['a', 'b']),
+    geometry: arrow.vectorFromArray([wkb, null], new arrow.Binary())
+  });
+  table.schema.fields[1].metadata.set('ARROW:extension:name', 'geoarrow.wkb');
+  const source = new KeplerTable({info: {id: 'wkb-source'}, color: [1, 2, 3]}).updateSchema(
+    processArrowTable({shape: 'arrow-table', data: table})
+  );
+  const proto = joinDatasets(source, source, {
+    leftField: 'key',
+    rightField: 'key',
+    type: 'LEFT',
+    rightColumns: []
+  });
+  const dataset = new KeplerTable({info: proto.info, color: [1, 2, 3]}).updateSchema(
+    validateInputData(proto.data)
+  );
+  const saved = datasetSchema[VERSIONS.v1].save(dataset);
+  t.equal(saved.fields[1].type, 'geojson', 'saved geometry uses the portable type');
+  t.equal(saved.allData[0][1], '010100000000000000000024400000000000002640', 'saves WKB as hex');
+  t.equal(saved.allData[1][1], null, 'retains missing geometry');
+  t.equal(
+    csvParseRows(formatCsv(dataset.dataContainer, dataset.fields))[1][1],
+    saved.allData[0][1],
+    'CSV uses portable WKB too'
+  );
+  const reloaded = reloadDataset(saved);
+  t.deepEqual(
+    parseGeoJsonRawFeature(reloaded.dataContainer.valueAt(0, 1))?.geometry,
+    {type: 'Point', coordinates: [10, 11]},
+    'reopened WKB remains a usable point'
+  );
+  t.ok(
+    dataset.dataContainer.valueAt(0, 1) instanceof Uint8Array,
+    'does not mutate live joined bytes'
+  );
+  t.deepEqual(table.getChild('geometry').get(0), wkb, 'does not mutate source bytes');
+  t.end();
+});
+
+test('#DatasetSchema -> invalid WKB stays invalid without mutating the row', t => {
+  const bytes = new Uint8Array([1, 2]);
+  const dataset = new KeplerTable({info: {id: 'invalid-wkb'}, color: [1, 2, 3]}).updateSchema({
+    fields: [{name: 'geometry', type: 'geoarrow', analyzerType: 'GEOMETRY'}],
+    rows: [[bytes], null]
+  });
+  const saved = datasetSchema[VERSIONS.v1].save(dataset);
+  t.equal(saved.allData[0][0], '0102', 'serializes bytes without inventing a geometry');
+  t.equal(
+    parseGeoJsonRawFeature(saved.allData[0][0]),
+    null,
+    'invalid geometry remains non-renderable'
+  );
+  t.equal(dataset.dataContainer.valueAt(0, 0), bytes, 'live row is unchanged');
+  t.equal(saved.allData[1], null, 'retains the null row when saving GeoArrow data');
+  t.equal(
+    reloadDataset(saved).dataContainer.rowAsArray(1),
+    null,
+    'JSON reopen retains the null row'
+  );
+  t.equal(dataset.dataContainer.rowAsArray(1), null, 'live null row is unchanged');
+  t.end();
+});
+
 test('#DatasetSchema -> Arrow time units save without BigInt conversion errors', t => {
   for (const [type, value] of [
     [new arrow.TimeSecond(), 12],
