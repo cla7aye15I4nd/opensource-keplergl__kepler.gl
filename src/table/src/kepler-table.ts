@@ -302,9 +302,25 @@ class KeplerTable<F extends Field = Field> {
     // on column updates, but invalidate cached filter results for every snapshot.
     const isRowSnapshot = !data.cols && Array.isArray(data.rows);
 
-    if (data.fields?.length && !fieldNamesMatch(this.fields, data.fields)) {
-      await this.importData({data});
+    if (
+      data.fields?.length &&
+      (!fieldNamesMatch(this.fields, data.fields) ||
+        (isRowSnapshot &&
+          data.fields.some(
+            (field, index) =>
+              (field.type !== undefined && field.type !== this.fields[index].type) ||
+              (field.format !== undefined &&
+                (field.format || '') !== (this.fields[index].format || ''))
+          )))
+    ) {
+      // Refresh reducers reapply filters synchronously, before importData's await
+      // settles. Drop snapshot caches before they can reuse stale row indexes.
+      this.filteredIdxCPU = undefined;
+      this.filterRecord = undefined;
+      this.filterRecordCPU = undefined;
+      this.changedFilters = undefined;
       this.dataRevision += 1;
+      await this.importData({data});
       return this;
     }
 
