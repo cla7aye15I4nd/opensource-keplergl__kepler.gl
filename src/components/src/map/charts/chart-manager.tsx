@@ -100,7 +100,7 @@ export default function ChartManagerFactory(
   SidePanelTitle: ReturnType<typeof SidePanelTitleFactory>,
   ChartTypeSelector: ReturnType<typeof ChartTypeSelectorFactory>
 ): React.FC<ChartManagerProps> {
-  const ChartManager = (props: ChartManagerProps) => {
+  const ChartManager = (props: ChartManagerProps & {chartsEnabled: boolean}) => {
     const {intl, children, panelActive = true, isExport = false} = props;
     const dispatch = useDispatch();
     const {selector} = useContext(KeplerGlContext);
@@ -172,6 +172,8 @@ export default function ChartManagerFactory(
       setTypeSelectorOpened(false);
     }, []);
 
+    // The wrapper prop invalidates memoization on parent renders. Store/local
+    // updates can render this component independently, so read the live flag.
     if (!getApplicationConfig().enableChartsPanel) {
       return null;
     }
@@ -215,5 +217,12 @@ export default function ChartManagerFactory(
     );
   };
 
-  return injectIntl(ChartManager) as React.FC<ChartManagerProps>;
+  const MemoizedChartManager = React.memo(ChartManager);
+  const ChartManagerWrapper = (props: ChartManagerProps) => (
+    <MemoizedChartManager
+      {...props}
+      chartsEnabled={Boolean(getApplicationConfig().enableChartsPanel)}
+    />
+  );
+  return injectIntl(ChartManagerWrapper) as React.FC<ChartManagerProps>;
 }
